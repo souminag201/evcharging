@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ev-optimizer
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run main.py --server.port=$PORT --server.address=0.0.0.0
+    plan: free
+    autoDeploy: true
+    region: oregon
+
+  - type: worker
+    name: de-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_de.py
+    plan: free
+    autoDeploy: true

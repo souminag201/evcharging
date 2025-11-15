@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+IEEE 33-Bus Distribution Network Reconfiguration + Power Flow
+- Input: tie-line index (1-5), branch to open (1-32)
+- Output: Average active power loss over 96 time steps (kW)
+- Uses: NetworkX for radiality, NumPy for power flow
+"""
+
+import numpy as np
+import networkx as nx
+from typing import Tuple
+
+# ===================================================================
+# 1. System Data
+# ===================================================================
+
+# Load profile (96 values)
+ld33 = np.array([
+    1, 0.796852378954214, 0.905685523350686, 0.772852355723896, 0.696457104419982,
+    0.969665398716195, 0.834907826074480, 0.619261495184992, 0.963817904941169,
+    0.762981610360049, 0.597804198647279, 0.612916593412120, 0.817775861764106,
+    0.8618744294621711, 0.885600853352678, 0.802574797297182, 0.737132906539590,
+    0.834320806053298, 0.949627799829399, 0.603900887507537, 0.582808963497374,
+    0.919960825288942, 0.791553749048017, 0.739284683846444, 0.971237733701583,
+    0.792226426143864, 0.849970189866794, 0.882752239143718, 0.925919842280361,
+    0.809659018808607, 0.753455078934539, 0.818126008584402, 0.915317475175245,
+    0.796112806535499, 0.597141352971931, 0.845548747153255, 0.747801591753298,
+    0.645493943885950, 0.632504208703770, 0.667229921967480, 0.870105180333912,
+    0.688613495854660, 0.859043879989780, 0.895840808074453, 0.624303744672319,
+    0.776853205678323, 0.921556193759485, 0.991667492629801, 0.584356418635378,
+    0.725591157420363, 0.711469703844786, 0.726220164017709, 0.892192077463970,
+    0.872556582457655, 0.805508459090065, 0.634881701422424, 0.636470658086701,
+    0.866083467332462, 0.882329049174814, 0.731330294678665, 0.939655958378722,
+    0.878153388428876, 0.972901651915848, 0.943200437249371, 0.741321178322164,
+    0.652102508365957, 0.752220876607755, 0.611631427888053, 0.874173081109239,
+    0.767604124538325, 0.961503625190938, 0.867785290657663, 0.603448116686367,
+    0.809650110784813, 0.684755283465572, 0.915571136574015, 0.930240332501103,
+    0.991035147547937, 0.896449179129082, 0.802681233548710, 0.653787872553817,
+    0.613136089038111, 0.624067070663698, 0.864789728506582, 0.889733090283428,
+    0.759474491440890, 0.611193350919206, 0.944314251732924, 0.688654119784208,
+    0.850090868020730, 0.735558263608668, 0.676477491079994, 0.892908085479423,
+    0.890380568691105, 0.947387217125089, 0.888747678652145
+])
+
+# Node data: [bus, P(kW), Q(kVar), B]
+M = np.array([
+    [1,   0,   0, 0],
+    [2, 100,  60, 0],
+    [3,  90,  40, 0],
+    [4, 120,  80, 0],
+    [5,  60,  30, 0],
+    [6,  60,  20, 0],
+    [7, 200, 100, 0],
+    [8, 200, 100, 0],
+    [9,  60,  20, 0],
+    [10, 60,  20, 0],
+    [11, 45,  30, 0],
+    [12, 60,  35, 0],
+    [13, 60,  35, 0],
+    [14,120,  80, 0],
+    [15, 60,  10, 0],
+    [16, 60,  20, 0],
+    [17, 60,  20, 0],
+    [18, 90,  40, 0],
+    [19, 90,  40, 0],
+    [20, 90,  40, 0],
+    [21, 90,  40, 0],
+    [22, 90,  40, 0],
+    [23, 90,  50, 0],
+    [24,420, 200, 0],
+    [25,420, 200, 0],
+    [26, 60,  25, 0],
+    [27, 60,  25, 0],
+    [28, 60,  20, 0],
+    [29,120,  70, 0],
+    [30,200, 600, 0],
+    [31,150,  70, 0],
+    [32,210, 100, 0],
+    [33, 60,  40, 0]
+], dtype=float)
+
+# Original lines: [no, from, to, R, X]
+l_original = np.array([
+    [1,  1,  2, 0.0922, 0.0470],
+    [2,  2,  3, 0.4930, 0.2511],
+    [3,  3,  4, 0.3660, 0.1864],
+    [4,  4,  5, 0.3811, 0.1941],
+    [5,  5,  6, 0.8190, 0.7070],
+    [6,  6,  7, 0.1872, 0.6188],
+    [7,  7,  8, 1.7114, 1.2351],
+    [8,  8,  9, 1.0300, 0.7400],
+    [9,  9, 10, 1.0400, 0.7400],
+    [10,10, 11, 0.1966, 0.0650],
+    [11,11, 12, 0.3744, 0.1238],
+    [12,12, 13, 1.4680, 1.1550],
+    [13,13, 14, 0.5416, 0.7129],
+    [14,14, 15, 0.5910, 0.5260],
+    [15,15, 16, 0.7463, 0.5450],
+    [16,16, 17, 1.2890, 1.7210],
+    [17,17, 18, 0.7320, 0.5740],
+    [18, 2, 19, 0.1640, 0.1565],
+    [19,19, 20, 1.5042, 1.3554],
+    [20,20, 21, 0.4095, 0.4784],
+    [21,21, 22, 0.7089, 0.9373],
+    [22, 3, 23, 0.4512, 0.3083],
+    [23,23, 24, 0.8980, 0.7091],
+    [24,24, 25, 0.8960, 0.7011],
+    [25, 6, 26, 0.2030, 0.1034],
+    [26,26, 27, 0.2842, 0.1447],
+    [27,27, 28, 1.0590, 0.9337],
+    [28,28, 29, 0.8042, 0.7006],
+    [29,29, 30, 0.5075, 0.2585],
+    [30,30, 31, 0.9744, 0.9630],
+    [31,31, 32, 0.3105, 0.3619],
+    [32,32, 33, 0.3410, 0.5302]
+])
+
+# Tie-lines: [no, from, to, R, X]
+Tielines = np.array([
+    [1,  8, 21, 2.0, 2.0],
+    [2,  9, 15, 2.0, 2.0],
+    [3, 12, 22, 2.0, 2.0],
+    [4, 25, 29, 0.5, 0.5],
+    [5, 18, 33, 0.5, 0.5]
+])
+
+# Base values
+MVAb = 100.0
+KVb = 12.66
+Zb = (KVb ** 2) / MVAb
+
+# ===================================================================
+# 2. Reconfiguration Function
+# ===================================================================
+def reconfigure_network(tie_idx: int, open_branch: int) -> Tuple[np.ndarray, bool]:
+    """
+    Close one tie-line, open one branch → return new line data + radial check
+    """
+    if tie_idx < 1 or tie_idx > 5 or open_branch < 1 or open_branch > 32:
+        return np.zeros((33, 5)), False
+
+    l = l_original.copy()
+    tie = Tielines[tie_idx - 1]
+
+    # Add tie-line as branch 33
+    l = np.vstack([l, np.array([33, tie[1], tie[2], tie[3], tie[4]])])
+
+    # Open the selected branch
+    l[open_branch - 1, 1:] = 0
+
+    # Build directed graph
+    G = nx.DiGraph()
+    for row in l:
+        fr, to = int(row[1]), int(row[2])
+        if fr > 0 and to > 0:
+            G.add_edge(fr, to)
+
+    # Radial check
+    if len(G.nodes) != 33 or len(G.edges) != 32:
+        return l, False
+    if not nx.is_weakly_connected(G.to_undirected()):
+        return l, False
+    return l, True
+
+# ===================================================================
+# 3. Backward-Forward Sweep Power Flow (One Time Step)
+# ===================================================================
+def bfs_power_flow(l_active: np.ndarray, load_scale: float) -> Tuple[float, float]:
+    """
+    Returns: P_loss (pu), Q_loss (pu) for one time step
+    """
+    P_load = M[:, 1] * load_scale / (1000 * MVAb)
+    Q_load = M[:, 2] * load_scale / (1000 * MVAb)
+
+    active = l_active[:, 1] > 0
+    if not np.any(active):
+        return np.inf, np.inf
+
+    l_br = l_active[active]
+    br = len(l_br)
+    R = l_br[:, 3] / Zb
+    X = l_br[:, 4] / Zb
+    Z = R + 1j * X
+
+    # Build graph
+    G = nx.DiGraph()
+    for i, row in enumerate(l_br):
+        fr, to = int(row[1]), int(row[2])
+        G.add_edge(fr, to, idx=i)
+
+    leaves = [n for n in G if G.out_degree(n) == 0]
+    V = np.ones(34, dtype=complex)  # 1..33
+    Ibr = np.zeros(br, dtype=complex)
+
+    # Backward: compute currents
+    for leaf in leaves:
+        stack = [leaf]
+        while stack:
+            node = stack[-1]
+            pred = list(G.predecessors(node))
+            if not pred:
+                stack.pop()
+                continue
+            pred = pred[0]
+            edge_idx = G[pred][node]['idx']
+            I_load = np.conj(complex(P_load[node-1], Q_load[node-1]) / np.conj(V[node]))
+            I_in = I_load
+            for child in G.successors(node):
+                child_edge = G[node][child]['idx']
+                I_in += Ibr[child_edge]
+            Ibr[edge_idx] = I_in
+            if node != 1:
+                stack.append(pred)
+            else:
+                stack.pop()
+
+    # Forward: update voltages
+    V[1] = 1.0
+    for edge_idx, (fr, to) in enumerate(zip(l_br[:, 1], l_br[:, 2])):
+        fr, to = int(fr), int(to)
+        V[to] = V[fr] - Ibr[edge_idx] * Z[edge_idx]
+
+    # Voltage check
+    Vmag = np.abs(V[1:])
+    if not (np.all(Vmag >= 0.8) and np.all(Vmag <= 1.05)):
+        return np.inf, np.inf
+
+    # Loss
+    I_mag = np.abs(Ibr)
+    P_loss_pu = np.sum(I_mag**2 * R)
+    Q_loss_pu = np.sum(I_mag**2 * X)
+
+    return P_loss_pu, Q_loss_pu
+
+# ===================================================================
+# 4. Fitness Function (for DE)
+# ===================================================================
+def network_loss(tie_idx: int, open_branch: int) -> float:
+    """
+    Input: tie-line index, branch to open
+    Output: average active loss over 96 time steps (kW)
+    """
+    l_new, is_radial = reconfigure_network(tie_idx, open_branch)
+    if not is_radial:
+        return 1e6  # penalty
+
+    total_P_loss = 0.0
+    for t in range(96):
+        scale = ld33[t]
+        P_loss_pu, _ = bfs_power_flow(l_new, scale)
+        if np.isinf(P_loss_pu):
+            return 1e6
+        total_P_loss += P_loss_pu * 100 * 1000  # pu → kW
+
+    avg_loss = total_P_loss / 4.0  # same as rpl2 = psum * 0.25
+    return avg_loss
+
+# ===================================================================
+# 5. Example Usage
+# ===================================================================
+if __name__ == "__main__":
+    # Example: close tie-line 1 (8-21), open branch 18
+    loss = network_loss(tie_idx=1, open_branch=18)
+    print(f"Average Active Power Loss: {loss:.2f} kW")
+
+    # Test multiple configurations
+    print("\nTesting known configurations:")
+    configs = [(1,18), (2,9), (3,22), (4,25), (5,33)]
+    for tie, br in configs:
+        loss = network_loss(tie, br)
+        print(f"Tie {tie}, Open {br}: {loss:.2f} kW")
